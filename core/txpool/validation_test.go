@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/holiman/uint256"
 )
 
 func TestValidateTransactionEIP2681(t *testing.T) {
@@ -93,6 +94,50 @@ func TestValidateTransactionEIP2681(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestValidateTransactionAmsterdamIntrinsicStateGas(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := *params.MergedTestChainConfig
+	config.AmsterdamTime = new(uint64)
+	blobConfig := *config.BlobScheduleConfig
+	blobConfig.Amsterdam = blobConfig.Osaka
+	config.BlobScheduleConfig = &blobConfig
+
+	head := &types.Header{
+		Number:     big.NewInt(1),
+		GasLimit:   5000000,
+		Time:       1,
+		Difficulty: big.NewInt(0),
+	}
+	signer := types.LatestSigner(&config)
+	opts := &ValidationOptions{
+		Config:       &config,
+		Accept:       0xFF,
+		MaxSize:      32 * 1024,
+		MaxBlobCount: 6,
+		MinTip:       big.NewInt(0),
+	}
+	from := crypto.PubkeyToAddress(key.PublicKey)
+	rules := config.Rules(head.Number, true, head.Time)
+	intrGas, err := core.IntrinsicGas(nil, nil, nil, from, nil, uint256.NewInt(0), rules, params.CostPerStateByte)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := types.MustSignNewTx(key, signer, &types.DynamicFeeTx{
+		ChainID:   config.ChainID,
+		Nonce:     0,
+		Gas:       intrGas.RegularGas,
+		GasFeeCap: big.NewInt(1),
+		GasTipCap: big.NewInt(1),
+	})
+	err = ValidateTransaction(tx, head, signer, opts)
+	if !errors.Is(err, core.ErrIntrinsicGas) {
+		t.Fatalf("ValidateTransaction() error = %v, want %v", err, core.ErrIntrinsicGas)
 	}
 }
 

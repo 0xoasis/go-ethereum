@@ -136,7 +136,12 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 	if err != nil {
 		return err
 	}
-	if tx.Gas() < intrGas.RegularGas {
+	if rules.IsAmsterdam {
+		regular := min(tx.Gas(), params.MaxTxGas)
+		if !vm.NewGasBudget(regular, tx.Gas()-regular).CanAfford(intrGas) {
+			return fmt.Errorf("%w: gas %v, minimum needed %v", core.ErrIntrinsicGas, tx.Gas(), intrGas)
+		}
+	} else if tx.Gas() < intrGas.RegularGas {
 		return fmt.Errorf("%w: gas %v, minimum needed %v", core.ErrIntrinsicGas, tx.Gas(), intrGas.RegularGas)
 	}
 	// Ensure the transaction can cover floor data gas.
