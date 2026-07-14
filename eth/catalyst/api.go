@@ -317,12 +317,13 @@ func (api *ConsensusAPI) forkchoiceUpdated(ctx context.Context, update engine.Fo
 			PayloadID: id,
 		}
 	}
+	current := api.eth.BlockChain().CurrentBlock()
 	if rawdb.ReadCanonicalHash(api.eth.ChainDb(), block.NumberU64()) != update.HeadBlockHash {
 		// Block is not canonical, set head.
 		if latestValid, err := api.eth.BlockChain().SetCanonical(block); err != nil {
 			return engine.ForkChoiceResponse{PayloadStatus: engine.PayloadStatusV1{Status: engine.INVALID, LatestValidHash: &latestValid}}, err
 		}
-	} else if api.eth.BlockChain().CurrentBlock().Hash() == update.HeadBlockHash {
+	} else if current.Hash() == update.HeadBlockHash {
 		// If the specified head matches with our local head, do nothing and keep
 		// generating the payload. It's a special corner case that a few slots are
 		// missing and we are requested to generate the payload in slot.
@@ -331,10 +332,12 @@ func (api *ConsensusAPI) forkchoiceUpdated(ctx context.Context, update engine.Fo
 			log.Info("Skipping beacon update to finalized ancestor", "number", block.NumberU64(), "hash", update.HeadBlockHash)
 			return valid(nil), nil
 		}
-		depth := api.eth.BlockChain().CurrentBlock().Number.Uint64() - block.NumberU64()
-		if api.maxReorgDepth > 0 && depth >= api.maxReorgDepth {
-			log.Warn("Refusing too deep reorg", "depth", depth, "head", update.HeadBlockHash)
-			return engine.STATUS_INVALID, engine.TooDeepReorg.With(fmt.Errorf("reorg depth %d exceeds limit %d", depth, api.maxReorgDepth))
+		if current.Number.Uint64() > block.NumberU64() {
+			depth := current.Number.Uint64() - block.NumberU64()
+			if api.maxReorgDepth > 0 && depth > api.maxReorgDepth {
+				log.Warn("Refusing too deep reorg", "depth", depth, "head", update.HeadBlockHash)
+				return engine.STATUS_INVALID, engine.TooDeepReorg.With(fmt.Errorf("reorg depth %d exceeds limit %d", depth, api.maxReorgDepth))
+			}
 		}
 		if !api.eth.Synced() {
 			log.Info("Ignoring beacon update to old head while syncing", "number", block.NumberU64(), "hash", update.HeadBlockHash)

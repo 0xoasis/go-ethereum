@@ -479,23 +479,35 @@ func TestForkchoiceUpdatedReorgDepthLimit(t *testing.T) {
 	genesis, blocks := generateMergeChain(10, true)
 
 	t.Run("limited", func(t *testing.T) {
+		const maxDepth = 5
 		n, ethservice := startEthService(t, genesis, blocks, func(cfg *ethconfig.Config) {
-			cfg.EngineMaxReorgDepth = 5
+			cfg.EngineMaxReorgDepth = maxDepth
 		})
 		defer n.Close()
 
 		api := newConsensusAPIWithoutHeartbeat(ethservice)
 
-		// Rewinding the head a few blocks within the limit is accepted.
-		shallow := engine.ForkchoiceStateV1{HeadBlockHash: blocks[6].Hash()}
-		if _, err := api.ForkchoiceUpdatedV1(context.Background(), shallow, nil); err != nil {
-			t.Fatalf("rewind within reorg depth limit failed: %v", err)
+		// Rewinding the head exactly to the configured limit is accepted.
+		exact := blocks[len(blocks)-1-int(maxDepth)]
+		update := engine.ForkchoiceStateV1{HeadBlockHash: exact.Hash()}
+		if _, err := api.ForkchoiceUpdatedV1(context.Background(), update, nil); err != nil {
+			t.Fatalf("rewind at reorg depth limit failed: %v", err)
 		}
-		if head := ethservice.BlockChain().CurrentBlock().Number.Uint64(); head != blocks[6].NumberU64() {
-			t.Fatalf("chain head not rewound: have %d, want %d", head, blocks[6].NumberU64())
+		if head := ethservice.BlockChain().CurrentBlock().Number.Uint64(); head != exact.NumberU64() {
+			t.Fatalf("chain head not rewound: have %d, want %d", head, exact.NumberU64())
+		}
+		// Moving the head forward again to a known canonical descendant is not a reorg.
+		latest := blocks[len(blocks)-1]
+		update = engine.ForkchoiceStateV1{HeadBlockHash: latest.Hash()}
+		if _, err := api.ForkchoiceUpdatedV1(context.Background(), update, nil); err != nil {
+			t.Fatalf("forward canonical update failed: %v", err)
+		}
+		if head := ethservice.BlockChain().CurrentBlock().Number.Uint64(); head != latest.NumberU64() {
+			t.Fatalf("chain head not advanced: have %d, want %d", head, latest.NumberU64())
 		}
 		// Rewinding beyond the limit is refused.
-		deep := engine.ForkchoiceStateV1{HeadBlockHash: genesis.ToBlock().Hash()}
+		tooDeep := blocks[len(blocks)-1-int(maxDepth)-1]
+		deep := engine.ForkchoiceStateV1{HeadBlockHash: tooDeep.Hash()}
 		_, err := api.ForkchoiceUpdatedV1(context.Background(), deep, nil)
 		var apiErr *engine.EngineAPIError
 		if !errors.As(err, &apiErr) || apiErr.ErrorCode() != engine.TooDeepReorg.ErrorCode() {
