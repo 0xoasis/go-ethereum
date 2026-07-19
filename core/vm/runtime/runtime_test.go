@@ -825,6 +825,29 @@ func TestRuntimeJSTracer(t *testing.T) {
 	}
 }
 
+func TestAmsterdamCreateChecksBalance(t *testing.T) {
+	var (
+		amsterdam = uint64(0)
+		config    = *params.MergedTestChainConfig
+		origin    = common.HexToAddress("0xcafe")
+	)
+	config.AmsterdamTime = &amsterdam
+	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	_, _, _, err := Create([]byte{byte(vm.STOP)}, &Config{
+		ChainConfig: &config,
+		Origin:      origin,
+		GasLimit:    100_000,
+		Value:       big.NewInt(1),
+		State:       statedb,
+	})
+	if err != vm.ErrInsufficientBalance {
+		t.Fatalf("create error = %v, want %v", err, vm.ErrInsufficientBalance)
+	}
+	if balance := statedb.GetBalance(origin); !balance.IsZero() {
+		t.Fatalf("origin balance underflowed: got %v, want 0", balance)
+	}
+}
+
 func TestJSTracerCreateTx(t *testing.T) {
 	jsTracer := `
 	{enters: 0, exits: 0,
