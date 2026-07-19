@@ -81,12 +81,19 @@ var (
 			return common.Address{}, nil, nil, errors.New("GetABI returned nil")
 		  }
 		  {{range $pattern, $name := .Libraries}}
-			{{decapitalise $name}}Addr, tx, _, _ := Deploy{{capitalise $name}}(auth, backend)
-			ctx, _ := context.WithTimeout(context.Background(), 5 * time.Second)
-			if err := bind.WaitAccepted(ctx, backend, tx); err != nil {
-			    return common.Address{}, nil, nil, err
+			{
+			  {{decapitalise $name}}Addr, tx, _, err := Deploy{{capitalise $name}}(auth, backend)
+			  if err != nil {
+				return common.Address{}, nil, nil, err
+			  }
+			  ctx, cancel := context.WithTimeout(context.Background(), 5 * time.Second)
+			  err = bind.WaitAccepted(ctx, backend, tx)
+			  cancel()
+			  if err != nil {
+				return common.Address{}, nil, nil, err
+			  }
+			  {{$contract.Type}}Bin = strings.ReplaceAll({{$contract.Type}}Bin, "__${{$pattern}}$__", {{decapitalise $name}}Addr.String()[2:])
 			}
-			{{$contract.Type}}Bin = strings.ReplaceAll({{$contract.Type}}Bin, "__${{$pattern}}$__", {{decapitalise $name}}Addr.String()[2:])
 		  {{end}}
 		  address, tx, contract, err := bind.DeployContract(auth, *parsed, common.FromHex({{.Type}}Bin), backend {{range .Constructor.Inputs}}, {{.Name}}{{end}})
 		  if err != nil {

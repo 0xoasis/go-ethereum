@@ -1394,6 +1394,14 @@ var bindTests = []struct {
 			sim := backends.NewSimulatedBackend(types.GenesisAlloc{auth.From: {Balance: big.NewInt(10000000000000000)}}, 10000000)
 			defer sim.Close()
 
+			// A library deployment failure must be returned to the caller, not panic
+			// while waiting for the nil transaction returned by DeployMath.
+			unfundedKey, _ := crypto.GenerateKey()
+			unfundedAuth, _ := bind.NewKeyedTransactorWithChainID(unfundedKey, big.NewInt(1337))
+			if _, _, _, err := DeployUseLibrary(unfundedAuth, sim); err == nil {
+				t.Fatal("expected deployment with unfunded account to fail")
+			}
+
 			//deploy the test contract
 			_, _, testContract, err := DeployUseLibrary(auth, sim)
 			if err != nil {
