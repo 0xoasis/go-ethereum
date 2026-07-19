@@ -960,6 +960,39 @@ func TestDelegatedAccountAccessCost(t *testing.T) {
 	}
 }
 
+func TestAmsterdamRuntimeReturnsStateGas(t *testing.T) {
+	var (
+		amsterdam = uint64(0)
+		config    = *params.MergedTestChainConfig
+		address   = common.HexToAddress("0x1234")
+		gasLimit  = params.MaxTxGas + 100_000
+		gasUsed   uint64
+	)
+	config.AmsterdamTime = &amsterdam
+	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	statedb.SetCode(address, []byte{byte(vm.STOP)}, tracing.CodeChangeUnspecified)
+
+	_, gasLeft, err := Call(address, nil, &Config{
+		ChainConfig: &config,
+		GasLimit:    gasLimit,
+		State:       statedb,
+		EVMConfig: vm.Config{Tracer: &tracing.Hooks{
+			OnTxEnd: func(receipt *types.Receipt, err error) {
+				gasUsed = receipt.GasUsed
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("call failed: %v", err)
+	}
+	if gasLeft != gasLimit {
+		t.Fatalf("gas left = %d, want %d", gasLeft, gasLimit)
+	}
+	if gasUsed != 0 {
+		t.Fatalf("reported gas used = %d, want 0", gasUsed)
+	}
+}
+
 func TestManyLargeStacks(t *testing.T) {
 	// This piece of code will push 512 items to the stack, and then call itself
 	// recursively.
