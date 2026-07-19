@@ -306,6 +306,17 @@ func (f *Freezer) TruncateHead(items uint64) (uint64, error) {
 			return 0, err
 		}
 	}
+	// Head truncation may reset a table below its previous tail. Recompute each
+	// group's cached tail from table metadata so reads observe the new range.
+	for group, tail := range f.tails {
+		var hidden uint64
+		for _, table := range f.tables {
+			if table.config.tailGroup == group {
+				hidden = max(hidden, table.itemHidden.Load())
+			}
+		}
+		tail.Store(hidden)
+	}
 	f.head.Store(items)
 	return oitems, nil
 }

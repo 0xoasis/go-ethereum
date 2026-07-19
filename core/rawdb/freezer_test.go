@@ -463,10 +463,24 @@ func TestChainFreezerBALAlignment(t *testing.T) {
 			t.Fatalf("reading BAL[%d] succeeded; want error (out of bounds)", i)
 		}
 	}
+	// Rewinding below the aligned empty table must move both its on-disk tail
+	// and the cached group tail. Otherwise newly appended BALs below the old
+	// alignment point are hidden until restart.
+	const rewind = items - 1
+	if _, err := f.TruncateHead(rewind); err != nil {
+		t.Fatalf("head truncation below empty BAL tail failed: %v", err)
+	}
+	if got, _ := f.Ancients(); got != rewind {
+		t.Fatalf("head after rewind: got %d, want %d", got, rewind)
+	}
+	if tail, err := f.Tail(ChainFreezerBALGroup); err != nil || tail != rewind {
+		t.Fatalf("BAL tail after rewind: got %d (err %v), want %d", tail, err, rewind)
+	}
+
 	// A subsequent batch must append uniformly to every table, BAL included.
 	balPayload := []byte("real-bal")
 	if _, err := f.ModifyAncients(func(op ethdb.AncientWriteOp) error {
-		i := items
+		i := rewind
 		if err := op.AppendRaw(ChainFreezerHashTable, i, payload); err != nil {
 			return err
 		}
@@ -486,15 +500,28 @@ func TestChainFreezerBALAlignment(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("post-alignment write failed: %v", err)
 	}
-	if got, _ := f.Ancients(); got != items+1 {
-		t.Fatalf("head after post-alignment write: got %d, want %d", got, items+1)
+	if got, _ := f.Ancients(); got != items {
+		t.Fatalf("head after post-alignment write: got %d, want %d", got, items)
 	}
-	got, err := f.Ancient(ChainFreezerBALTable, items)
+	got, err := f.Ancient(ChainFreezerBALTable, rewind)
 	if err != nil {
-		t.Fatalf("BAL[%d]: %v", items, err)
+		t.Fatalf("BAL[%d]: %v", rewind, err)
 	}
 	if !bytes.Equal(got, balPayload) {
-		t.Fatalf("BAL[%d]: got %x, want %x", items, got, balPayload)
+		t.Fatalf("BAL[%d]: got %x, want %x", rewind, got, balPayload)
+	}
+
+	// Once the BAL table contains data, rewinding below its tail must still
+	// succeed. Every visible BAL belongs to a discarded block in this case.
+	const deepRewind = rewind - 1
+	if _, err := f.TruncateHead(deepRewind); err != nil {
+		t.Fatalf("head truncation below non-empty BAL tail failed: %v", err)
+	}
+	if tail, err := f.Tail(ChainFreezerBALGroup); err != nil || tail != deepRewind {
+		t.Fatalf("BAL tail after deep rewind: got %d (err %v), want %d", tail, err, deepRewind)
+	}
+	if _, err := f.Ancient(ChainFreezerBALTable, rewind); err == nil {
+		t.Fatalf("reading discarded BAL[%d] succeeded", rewind)
 	}
 }
 
