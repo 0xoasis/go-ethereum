@@ -17,6 +17,7 @@
 package fetcher
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
@@ -108,6 +109,7 @@ type isWaitingAvailability map[common.Hash]map[string]struct{}
 
 type isDecidedFull map[common.Hash]struct{}
 type isDecidedPartial map[common.Hash]struct{}
+type isUndecided []common.Hash
 
 type blobAnnounce struct {
 	hash    common.Hash
@@ -142,6 +144,34 @@ type mockRand struct {
 
 func (r *mockRand) Intn(n int) int {
 	return r.value
+}
+
+func TestBlobFetcherIgnoresInitialPartialAnnouncement(t *testing.T) {
+	for _, random := range []int{5, 60} {
+		t.Run(fmt.Sprintf("random-%d", random), func(t *testing.T) {
+			testBlobFetcher(t, blobFetcherTest{
+				init: func() *BlobFetcher {
+					return NewBlobFetcher(
+						BlobFetcherFunctions{
+							HasPayload:    func(common.Hash) bool { return false },
+							AddCells:      func(common.Hash, map[string]*PeerCellDelivery, types.CustodyBitmap) {},
+							FetchPayloads: func(string, []common.Hash, types.CustodyBitmap) error { return nil },
+							DropPeer:      func(string) {},
+						},
+						custody,
+						&mockRand{value: random},
+						15,
+					)
+				},
+				steps: []interface{}{
+					doBlobNotify{peer: "A", hashes: []common.Hash{testBlobTxHashes[0]}, custody: custody},
+					isUndecided{testBlobTxHashes[0]},
+					isWaitingAvailability(nil),
+					isBlobScheduled{announces: nil, fetching: nil},
+				},
+			})
+		})
+	}
 }
 
 // TestBlobFetcherFullSchedule tests scheduling full payload decision
@@ -870,6 +900,18 @@ func testBlobFetcher(t *testing.T, tt blobFetcherTest) {
 			for hash := range step {
 				if _, ok := fetcher.partial[hash]; !ok {
 					t.Errorf("step %d: hash %x not decided for partial request", i, hash)
+					return
+				}
+			}
+
+		case isUndecided:
+			for _, hash := range step {
+				if _, ok := fetcher.full[hash]; ok {
+					t.Errorf("step %d: hash %x unexpectedly decided for full request", i, hash)
+					return
+				}
+				if _, ok := fetcher.partial[hash]; ok {
+					t.Errorf("step %d: hash %x unexpectedly decided for partial request", i, hash)
 					return
 				}
 			}

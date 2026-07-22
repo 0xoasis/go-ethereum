@@ -307,6 +307,12 @@ func (f *BlobFetcher) loop() {
 				// Decide full or partial request
 				if _, ok := f.full[hash]; !ok {
 					if _, ok := f.partial[hash]; !ok {
+						// Only full announcements can initiate a fetch decision. Recording
+						// an unusable partial announcement here would leave decision state
+						// outside the per-peer announcement limit and cleanup paths.
+						if ann.cells != types.CustodyBitmapAll {
+							continue
+						}
 						// Not decided yet
 						var randomValue int
 						if f.rand == nil {
