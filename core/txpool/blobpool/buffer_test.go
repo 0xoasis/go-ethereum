@@ -166,21 +166,29 @@ func TestMultiPeerDelivery(t *testing.T) {
 	}
 }
 
-func TestBadCell(t *testing.T) {
+func TestBadCellIncompleteAfterDrop(t *testing.T) {
 	key, _ := crypto.GenerateKey()
 	blobCount := 1
 
-	var dropped []string
+	var (
+		dropped []string
+		pooled  *BlobTxForPool
+	)
 	buf := NewBlobBuffer(BlobBufferFunctions{
 		ValidateTx: func(tx *types.Transaction) error { return nil },
-		AddToPool:  func(ptx *BlobTxForPool) error { return nil },
-		DropPeer:   func(peer string) { dropped = append(dropped, peer) },
+		AddToPool: func(ptx *BlobTxForPool) error {
+			pooled = ptx
+			return nil
+		},
+		DropPeer: func(peer string) { dropped = append(dropped, peer) },
 	})
 
 	tx := makeV1Tx(t, 0, blobCount, 0, key)
 	hash := tx.Hash()
 	buf.AddTx([]*types.Transaction{tx}, "peerA")
 
+	// Honest peer only covers half of the required custody. After dropping the
+	// bad peer the residual cells must not be admitted incomplete.
 	goodDelivery := makePeerDelivery(t, 0, blobCount, []uint64{0, 1, 2, 3})
 	badDelivery := makePeerDelivery(t, 0, blobCount, []uint64{4, 5, 6, 7})
 	for i := range badDelivery.Cells {
@@ -201,6 +209,65 @@ func TestBadCell(t *testing.T) {
 		t.Fatalf("only peerC should have been dropped, got: %v", dropped)
 	}
 	if buf.HasTx(hash) || buf.HasCells(hash) {
-		t.Fatal("buffer should be empty after bad cell drop")
+		t.Fatal("buffer should be empty after incomplete residual drop")
+	}
+	if hashes, errs := buf.Flush(); len(hashes) != 0 || len(errs) != 0 || pooled != nil {
+		t.Fatalf("incomplete residual was pooled: hashes=%v errs=%v pooled=%v", hashes, errs, pooled != nil)
+	}
+}
+
+func TestBadCellPreservesCompleteHonestPeer(t *testing.T) {
+	key, _ := crypto.GenerateKey()
+	blobCount := 1
+
+	var (
+		dropped []string
+		pooled  *BlobTxForPool
+	)
+	buf := NewBlobBuffer(BlobBufferFunctions{
+		ValidateTx: func(tx *types.Transaction) error { return nil },
+		AddToPool: func(ptx *BlobTxForPool) error {
+			pooled = ptx
+			return nil
+		},
+		DropPeer: func(peer string) { dropped = append(dropped, peer) },
+	})
+
+	tx := makeV1Tx(t, 0, blobCount, 0, key)
+	hash := tx.Hash()
+	buf.AddTx([]*types.Transaction{tx}, "peerA")
+
+	// Honest peer already covers the full required custody; a second malicious
+	// peer must be dropped without suppressing the valid delivery.
+	indices := []uint64{0, 1, 2, 3, 4, 5, 6, 7}
+	goodDelivery := makePeerDelivery(t, 0, blobCount, indices)
+	badDelivery := makePeerDelivery(t, 0, blobCount, indices)
+	for i := range badDelivery.Cells {
+		for j := range badDelivery.Cells[i] {
+			badDelivery.Cells[i][j] ^= 0xFF
+		}
+	}
+	custody := types.NewCustodyBitmap(indices)
+
+	buf.AddCells(hash, map[string]*PeerDelivery{
+		"peerB": goodDelivery,
+		"peerC": badDelivery,
+	}, custody)
+
+	if len(dropped) != 1 || dropped[0] != "peerC" {
+		t.Fatalf("only peerC should have been dropped, got: %v", dropped)
+	}
+	if buf.HasTx(hash) || buf.HasCells(hash) {
+		t.Fatal("buffer should be empty after completing with honest cells")
+	}
+	hashes, errs := buf.Flush()
+	if len(hashes) != 1 || hashes[0] != hash || len(errs) != 1 || errs[0] != nil {
+		t.Fatalf("honest delivery was not flushed: hashes=%v errs=%v", hashes, errs)
+	}
+	if pooled == nil {
+		t.Fatal("honest delivery was not added to the pool")
+	}
+	if pooled.CellSidecar.Custody != custody {
+		t.Fatalf("wrong custody after dropping bad peer: have %v, want %v", pooled.CellSidecar.Custody, custody)
 	}
 }

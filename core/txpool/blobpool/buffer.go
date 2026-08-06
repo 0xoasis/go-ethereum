@@ -171,16 +171,32 @@ func (b *BlobBuffer) AddCells(hash common.Hash, deliveries map[string]*PeerDeliv
 // addition into the pool. The actual addition happens in Flush().
 func (b *BlobBuffer) storeCompleted(hash common.Hash, tx *types.Transaction, cells *cellEntry) {
 	sidecar := tx.BlobTxSidecar()
+	required := cells.custody
 
-	// Per-peer cell verification
+	// Per-peer cell verification. Drop only invalid deliveries so a bad peer
+	// cannot suppress honest cells that still cover the required custody.
 	if badPeers := b.verifyCells(cells, sidecar); len(badPeers) > 0 {
 		b.dropPeers(badPeers)
+		for _, peer := range badPeers {
+			delete(cells.deliveries, peer)
+		}
+		if len(cells.deliveries) == 0 {
+			delete(b.cells, hash)
+			delete(b.txs, hash)
+			return
+		}
+	}
+
+	blobCount := len(tx.BlobHashes())
+	sorted, custody := sortCells(cells, blobCount)
+
+	// Remaining cells must still cover the custody the fetcher reported as
+	// complete. Incomplete residuals must not be admitted to the pool.
+	if custody.Intersection(required).OneCount() != required.OneCount() {
 		delete(b.cells, hash)
 		delete(b.txs, hash)
 		return
 	}
-	blobCount := len(tx.BlobHashes())
-	sorted, custody := sortCells(cells, blobCount)
 
 	cellSidecar := types.BlobTxCellSidecar{
 		Version:     sidecar.Version,
